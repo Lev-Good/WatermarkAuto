@@ -2,7 +2,9 @@
 
 ## הורדה והפעלה
 
-מעמוד [המהדורה האחרונה](https://github.com/Lev-Good/WatermarkAuto/releases/latest) מורידים את `WatermarkAuto-Windows-x64.zip`. מחלצים את כל הקבצים לתיקייה אחת ופותחים את `WatermarkAuto.exe`. החבילה ל־Windows x64 כוללת FFmpeg ופועלת ללא התקנה וללא Python.
+מעמוד [המהדורה האחרונה](https://github.com/Lev-Good/WatermarkAuto/releases/latest) מורידים את `WatermarkAuto-Setup-Windows-x64.exe` ומפעילים אותו. לאחר ההתקנה פותחים את **WatermarkAuto** מתפריט התחל.
+
+להפעלה ללא התקנה, מורידים את `WatermarkAuto-Windows-x64.zip`, מחלצים את כל הקבצים לתיקייה אחת ופותחים את `WatermarkAuto.exe`. שתי האפשרויות כוללות FFmpeg ואינן דורשות Python.
 
 ## שימוש
 
