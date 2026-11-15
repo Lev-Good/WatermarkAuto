@@ -1,0 +1,8 @@
+.watermark-deps/
+.watermark-settings.json
+.watermark-settings.*.tmp
+__pycache__/
+ffmpeg.exe
+.package-tools/
+.package-build/
+dist/
