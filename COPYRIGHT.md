@@ -11,3 +11,5 @@ FFmpeg פועל כתהליך נפרד לביצוע עיבוד המדיה. גרס
 - [מאגר FFmpeg](https://github.com/FFmpeg/FFmpeg)
 - [מהדורת FFmpeg ל־Windows המשמשת בחבילה](https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/tag/autobuild-2026-11-13-12-43)
 - [imageio-ffmpeg, המשמש בהפעלה מקוד המקור](https://github.com/imageio/imageio-ffmpeg)
+
+למעקב אחר קבצים ולאזור ההודעות משמשים [watchdog](https://github.com/gorakhargosh/watchdog) ו־[pystray](https://github.com/moses-palmer/pystray), יחד עם התלויות שלהם. תנאי הרישיון של הרכיבים המצורפים נמצאים בתיקיית `Licenses`.

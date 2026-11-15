@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
 import uuid
 from collections import deque
 from ctypes import wintypes
@@ -28,6 +29,54 @@ kernel.CloseHandle.argtypes = [wintypes.HANDLE]
 INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
+class RenderCancelled(Exception):
+    pass
+
+
+class RenderJob:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.process = None
+        self.cancelled = False
+        self.finished = False
+
+    def cancel(self):
+        with self.lock:
+            if self.finished or self.cancelled:
+                return False
+            self.cancelled = True
+            if self.process is not None and self.process.poll() is None:
+                self.process.kill()
+            return True
+
+    def start(self, args):
+        with self.lock:
+            self.check_cancelled()
+            self.process = subprocess.Popen(
+                args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", creationflags=WINDOW_FLAGS)
+            return self.process
+
+    def check_cancelled(self):
+        if self.cancelled:
+            raise RenderCancelled
+
+    def publish(self, temporary, target):
+        with self.lock:
+            self.check_cancelled()
+            try:
+                temporary.rename(target)
+            except FileExistsError:
+                # Another running window completed the same job first.
+                pass
+            self.finished = True
+
+    def finish(self):
+        with self.lock:
+            self.process = None
+            self.finished = True
+
+
 def hold_for_read(path):
     # Allow FFmpeg and other readers in, while excluding writers and renames.
     handle = kernel.CreateFileW(str(path), 0x80000000, 1, None, 3, 0x80, None)
@@ -48,7 +97,7 @@ def output_path(source, folder, stamp, logo_hash, position):
     return folder / f"{source.stem[:70]}_watermarked_{tag}{suffix}"
 
 
-def render(ffmpeg, source, logo, position, target, report):
+def render(ffmpeg, source, logo, position, target, report, job):
     is_video = source.suffix.lower() in VIDEOS
     margin = "floor(min(W,H)*0.025)"
     x, y = (coordinate.replace("m", margin) for coordinate in POSITIONS[position])
@@ -79,9 +128,7 @@ def render(ffmpeg, source, logo, position, target, report):
     first_input = True
     started = monotonic()
     try:
-        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, encoding="utf-8", errors="replace",
-                              creationflags=WINDOW_FLAGS) as process:
+        with job.start(args) as process:
             for line in process.stdout:
                 line = line.strip()
                 if line.startswith("Input #1,"):
@@ -99,12 +146,11 @@ def render(ffmpeg, source, logo, position, target, report):
                     report(None)
                 elif "=" not in line or "Error" in line:
                     diagnostics.append(line)
-            if process.wait() or not temporary.is_file() or not temporary.stat().st_size:
+            exit_code = process.wait()
+            job.check_cancelled()
+            if exit_code or not temporary.is_file() or not temporary.stat().st_size:
                 raise RuntimeError("\n".join(diagnostics) or "FFmpeg לא יצר קובץ פלט.")
-        try:
-            temporary.rename(target)
-        except FileExistsError:
-            # Another running window completed the same job first.
-            pass
+        job.publish(temporary, target)
     finally:
+        job.finish()
         temporary.unlink(missing_ok=True)

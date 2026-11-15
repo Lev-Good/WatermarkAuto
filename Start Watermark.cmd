@@ -7,6 +7,16 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+python -c "import sys; sys.path.insert(0, '.watermark-deps'); import PIL, pystray, watchdog" >nul 2>&1
+if errorlevel 1 (
+    echo Installing local Windows tray and folder monitoring components.
+    python -m pip --disable-pip-version-check install --target ".watermark-deps" --only-binary=:all: -r requirements.txt
+    if errorlevel 1 (
+        echo Unable to install the application components.
+        pause
+        exit /b 1
+    )
+)
 if exist "ffmpeg.exe" goto launch
 if exist ".watermark-deps\imageio_ffmpeg\binaries\ffmpeg-*.exe" goto launch
 where ffmpeg.exe >nul 2>&1

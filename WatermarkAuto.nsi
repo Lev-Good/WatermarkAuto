@@ -2,12 +2,14 @@ Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
 
-!define VERSION "1.0.0"
-!define PACKAGE "dist\WatermarkAuto"
+!define VERSION "1.1.0"
+!ifndef PACKAGE
+  !define PACKAGE "dist\WatermarkAuto"
+!endif
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\WatermarkAuto"
 
 Name "WatermarkAuto"
-OutFile "dist\WatermarkAuto-Setup-Windows-x64.exe"
+OutFile "dist\WatermarkAuto-Setup-Windows-x64-${VERSION}.exe"
 InstallDir "$LOCALAPPDATA\Programs\WatermarkAuto"
 RequestExecutionLevel user
 SetCompressor zlib
@@ -70,6 +72,7 @@ Section "Uninstall"
   Delete "$INSTDIR\WatermarkAuto.exe"
   Delete "$INSTDIR\ffmpeg.exe"
   Delete "$INSTDIR\START-HERE.txt"
+  Delete "$INSTDIR\COPYRIGHT.md"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\_internal"
   RMDir /r "$INSTDIR\Licenses"
