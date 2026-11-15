@@ -10,7 +10,7 @@ Name "WatermarkAuto"
 OutFile "dist\WatermarkAuto-Setup-Windows-x64.exe"
 InstallDir "$LOCALAPPDATA\Programs\WatermarkAuto"
 RequestExecutionLevel user
-SetCompressor lzma
+SetCompressor zlib
 ManifestDPIAware true
 
 VIProductVersion "${VERSION}.0"
