@@ -7,11 +7,13 @@ import threading
 import uuid
 from collections import deque
 from ctypes import wintypes
+from math import log2
 from pathlib import Path
-from time import monotonic
 
 IMAGES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 VIDEOS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".mts", ".m2ts", ".mpg", ".mpeg"}
+HIGH, LOW, MATCH = "גבוה", "נמוך", "דומה למקור"
+QUALITY_MODES = (HIGH, LOW, MATCH)
 POSITIONS = {
     "ימין למטה": ("W-w-m", "H-h-m"),
     "שמאל למטה": ("m", "H-h-m"),
@@ -90,14 +92,16 @@ def signature(path):
     return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino
 
 
-def output_path(source, folder, stamp, logo_hash, position):
+def output_path(source, folder, stamp, logo_hash, position, quality=HIGH):
     identity = (os.path.normcase(str(source)), stamp, logo_hash, position)
+    if quality != HIGH:
+        identity += (quality,)
     tag = hashlib.sha256(repr(identity).encode()).hexdigest()[:14]
     suffix = ".mp4" if source.suffix.lower() in VIDEOS else source.suffix.lower()
     return folder / f"{source.stem[:70]}_watermarked_{tag}{suffix}"
 
 
-def render(ffmpeg, source, logo, position, target, report, job):
+def render(ffmpeg, source, logo, position, target, report, job, quality=HIGH):
     is_video = source.suffix.lower() in VIDEOS
     margin = "floor(min(W,H)*0.025)"
     x, y = (coordinate.replace("m", margin) for coordinate in POSITIONS[position])
@@ -110,47 +114,93 @@ def render(ffmpeg, source, logo, position, target, report, job):
     )
     if is_video:
         graph += ";[marked]pad=ceil(iw/2)*2:ceil(ih/2)*2[out]"
-        options = ["-map", "[out]", "-map", "0:a?", "-c:v", "libx264", "-preset",
-                   "fast", "-crf", "19", "-pix_fmt", "yuv420p", "-c:a", "aac",
-                   "-b:a", "192k", "-movflags", "+faststart"]
-    else:
-        options = ["-map", "[marked]", "-frames:v", "1", "-update", "1"]
-        if target.suffix in {".jpg", ".jpeg"}:
-            options += ["-q:v", "2"]
-
-    temporary = target.with_name(f".watermark-{uuid.uuid4().hex}{target.suffix}")
     args = [str(ffmpeg), "-hide_banner", "-nostdin", "-nostats", "-xerror", "-y",
             "-stats_period", "0.5", "-progress", "pipe:1", "-protocol_whitelist", "file",
-            "-i", str(source), "-protocol_whitelist", "file", "-i", str(logo),
-            "-filter_complex", graph, *options, str(temporary)]
+            "-i", str(source), "-protocol_whitelist", "file", "-i", str(logo)]
+
+    match_levels = (0, 2, 3) if target.suffix == ".bmp" else (1, 2, 3)
+    levels = {HIGH: (0,), LOW: (2,), MATCH: match_levels}[quality]
+    source_size = source.stat().st_size
+    size_limit = source_size * 1.10 if quality == MATCH else None
+    candidate = target.with_name(f".watermark-{uuid.uuid4().hex}{target.suffix}")
+    best = target.with_name(f".watermark-{uuid.uuid4().hex}{target.suffix}")
+    best_size = None
+    compact_crf = 38
+    try:
+        for level in levels:
+            pass_graph, options = encoding_options(graph, target.suffix, is_video, level, compact_crf)
+            encode([*args, "-filter_complex", pass_graph, *options, str(candidate)],
+                   candidate, is_video, report, job)
+            size = candidate.stat().st_size
+            if size_limit is None or size <= size_limit:
+                candidate.replace(best)
+                break
+            if best_size is None or size < best_size:
+                candidate.replace(best)
+                best_size = size
+            else:
+                candidate.unlink()
+            if is_video and level == 2:
+                # Estimate the next CRF from the measured size of this encode.
+                compact_crf = min(45, max(31, round(29 + 8 * log2(size / max(1, source_size)))))
+            if level != levels[-1]:
+                report(None)
+        job.publish(best, target)
+    finally:
+        job.finish()
+        candidate.unlink(missing_ok=True)
+        best.unlink(missing_ok=True)
+
+
+def encoding_options(graph, suffix, is_video, level, compact_crf):
+    if is_video:
+        crf = (19, 23, 29, compact_crf)[level]
+        audio_rate = ("192k", "128k", "96k", "64k")[level]
+        return graph, ["-map", "[out]", "-map", "0:a?", "-c:v", "libx264", "-preset",
+                       "fast", "-crf", str(crf), "-pix_fmt", "yuv420p", "-c:a", "aac",
+                       "-b:a", audio_rate, "-movflags", "+faststart"]
+
+    output = "[marked]"
+    options = []
+    if suffix in {".jpg", ".jpeg"}:
+        options = ["-q:v", str((2, 6, 9, 17)[level])]
+    elif suffix == ".webp":
+        options = ["-c:v", "libwebp", "-quality", str((75, 70, 45, 22)[level])]
+    elif suffix == ".bmp" and level:
+        options = ["-pix_fmt", "rgb8" if level == 3 else "rgb565le"]
+    elif suffix in {".png", ".tif", ".tiff"} and level:
+        options = (["-compression_level", "9", "-pred", "mixed"] if suffix == ".png"
+                   else ["-compression_algo", "deflate"])
+        if level >= 2:
+            # Quantize RGB while leaving the alpha channel and dimensions intact.
+            step = 17 if level == 2 else 51
+            channel = f"round(val/{step})*{step}"
+            graph += f";[marked]format=rgba,lutrgb=r='{channel}':g='{channel}':b='{channel}'[reduced]"
+            output = "[reduced]"
+    return graph, ["-map", output, "-frames:v", "1", "-update", "1", *options]
+
+
+def encode(args, target, is_video, report, job):
     diagnostics = deque(maxlen=20)
     duration = 0
     first_input = True
-    started = monotonic()
-    try:
-        with job.start(args) as process:
-            for line in process.stdout:
-                line = line.strip()
-                if line.startswith("Input #1,"):
-                    first_input = False
-                if first_input and not duration:
-                    match = re.match(r"Duration: (\d+):(\d+):(\d+\.\d+)", line)
-                    if match:
-                        hours, minutes, seconds = map(float, match.groups())
-                        duration = hours * 3600 + minutes * 60 + seconds
-                if line.startswith("out_time_us="):
-                    value = line.partition("=")[2]
-                    if is_video and duration and value.lstrip("-").isdigit():
-                        report(min(99, max(0, int(int(value) / (duration * 10_000)))))
-                elif line.startswith("progress=") and monotonic() - started > 1 and not duration:
-                    report(None)
-                elif "=" not in line or "Error" in line:
-                    diagnostics.append(line)
-            exit_code = process.wait()
-            job.check_cancelled()
-            if exit_code or not temporary.is_file() or not temporary.stat().st_size:
-                raise RuntimeError("\n".join(diagnostics) or "FFmpeg לא יצר קובץ פלט.")
-        job.publish(temporary, target)
-    finally:
-        job.finish()
-        temporary.unlink(missing_ok=True)
+    with job.start(args) as process:
+        for line in process.stdout:
+            line = line.strip()
+            if line.startswith("Input #1,"):
+                first_input = False
+            if first_input and not duration:
+                match = re.match(r"Duration: (\d+):(\d+):(\d+\.\d+)", line)
+                if match:
+                    hours, minutes, seconds = map(float, match.groups())
+                    duration = hours * 3600 + minutes * 60 + seconds
+            if line.startswith("out_time_us="):
+                value = line.partition("=")[2]
+                if is_video and duration and value.lstrip("-").isdigit():
+                    report(min(99, max(0, int(int(value) / (duration * 10_000)))))
+            elif "=" not in line or "Error" in line:
+                diagnostics.append(line)
+        exit_code = process.wait()
+        job.check_cancelled()
+        if exit_code or not target.is_file() or not target.stat().st_size:
+            raise RuntimeError("\n".join(diagnostics) or "FFmpeg לא יצר קובץ פלט.")

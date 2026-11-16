@@ -11,7 +11,7 @@ from pathlib import Path
 from time import monotonic
 from tkinter import filedialog, messagebox, ttk
 
-from watermark_engine import (IMAGES, POSITIONS, VIDEOS, RenderCancelled, RenderJob,
+from watermark_engine import (HIGH, IMAGES, POSITIONS, QUALITY_MODES, VIDEOS, RenderCancelled, RenderJob,
                               hold_for_read, kernel, output_path, render, signature)
 
 PACKAGED = getattr(sys, "frozen", False)
@@ -55,7 +55,7 @@ class InputChanges(FileSystemEventHandler):
                     break
 
 
-def watch(ffmpeg, source_dir, output_dir, logo, position, events, stop, wake):
+def watch(ffmpeg, source_dir, output_dir, logo, position, quality, events, stop, wake):
     observed = {}
     skipped = {}
     logo_handle = None
@@ -98,7 +98,7 @@ def watch(ffmpeg, source_dir, output_dir, logo, position, events, stop, wake):
                     if not source.is_file() or source.resolve() == logo:
                         continue
                     stamp = signature(source)
-                    target = output_path(source, output_dir, stamp, logo_hash, position)
+                    target = output_path(source, output_dir, stamp, logo_hash, position, quality)
                     if not stamp[0] or target.is_file() or skipped.get(source) == stamp:
                         continue
                 except OSError:
@@ -131,7 +131,7 @@ def watch(ffmpeg, source_dir, output_dir, logo, position, events, stop, wake):
                     job = RenderJob()
                     events.put(("active", source.name, len(ready) - index - 1, job))
                     render(ffmpeg, source, logo, position, target,
-                           lambda value: events.put(("progress", value)), job)
+                           lambda value: events.put(("progress", value)), job, quality)
                     events.put(("done", source.name, target.name))
                 except RenderCancelled:
                     skipped[source] = stamp
@@ -180,6 +180,8 @@ class App:
                       for key in ("input", "output", "logo")}
         position = settings.get("position")
         self.position = tk.StringVar(value=position if position in POSITIONS else next(iter(POSITIONS)))
+        quality = settings.get("quality")
+        self.quality = tk.StringVar(value=quality if quality in QUALITY_MODES else HIGH)
         self.status = tk.StringVar(value="המעקב כבוי")
         self.current = tk.StringVar()
         self.counts = tk.StringVar(value="הושלמו 0   ·   שגיאות 0")
@@ -202,7 +204,7 @@ class App:
         panel = ttk.Frame(root, padding=24)
         panel.pack(fill="both", expand=True)
         panel.columnconfigure(1, weight=1)
-        panel.rowconfigure(11, weight=1)
+        panel.rowconfigure(12, weight=1)
         ttk.Label(panel, text="סימן מים אוטומטי", style="Title.TLabel").grid(
             row=0, column=0, columnspan=3, sticky="e", pady=(0, 17))
         self.controls = []
@@ -219,16 +221,21 @@ class App:
                                  state="readonly", justify="right")
         positions.grid(row=4, column=1, sticky="e", pady=5)
         self.controls.append((positions, "readonly"))
+        ttk.Label(panel, text="איכות וגודל הפלט").grid(row=5, column=2, sticky="e", padx=(12, 0))
+        quality_modes = ttk.Combobox(panel, values=QUALITY_MODES, textvariable=self.quality,
+                                     state="readonly", justify="right")
+        quality_modes.grid(row=5, column=1, sticky="e", pady=5)
+        self.controls.append((quality_modes, "readonly"))
 
         buttons = ttk.Frame(panel)
         options = ttk.Frame(panel)
-        options.grid(row=5, column=0, columnspan=3, sticky="e", pady=(9, 0))
+        options.grid(row=6, column=0, columnspan=3, sticky="e", pady=(9, 0))
         ttk.Checkbutton(options, text="המשך מעקב ברקע בסגירת החלון", variable=self.keep_watching,
                         command=self.save_preferences).pack(side="right")
         ttk.Checkbutton(options, text="התראת Windows בסיום עיבוד", variable=self.notify_on_done,
                         command=self.save_preferences).pack(side="right", padx=15)
 
-        buttons.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(14, 14))
+        buttons.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(14, 14))
         self.start_button = ttk.Button(buttons, text="התחלת מעקב", style="Start.TButton", command=self.start)
         self.start_button.pack(side="right")
         self.stop_button = ttk.Button(buttons, text="עצירת מעקב", state="disabled", command=self.request_stop)
@@ -237,17 +244,17 @@ class App:
                                         command=self.cancel_current)
         self.cancel_button.pack(side="right")
         ttk.Button(buttons, text="פתיחת תיקיית הפלט", command=self.open_output).pack(side="left")
-        ttk.Label(panel, textvariable=self.status, style="Status.TLabel").grid(row=7, column=2, sticky="e")
-        ttk.Label(panel, textvariable=self.counts).grid(row=7, column=0, columnspan=2, sticky="w")
-        ttk.Label(panel, textvariable=self.current, anchor="e").grid(row=8, column=0, columnspan=3, sticky="ew")
+        ttk.Label(panel, textvariable=self.status, style="Status.TLabel").grid(row=8, column=2, sticky="e")
+        ttk.Label(panel, textvariable=self.counts).grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Label(panel, textvariable=self.current, anchor="e").grid(row=9, column=0, columnspan=3, sticky="ew")
         self.progress = ttk.Progressbar(panel)
-        self.progress.grid(row=9, column=0, columnspan=3, sticky="ew", pady=(8, 15))
-        ttk.Label(panel, text="יומן פעילות").grid(row=10, column=2, sticky="e", pady=(0, 4))
+        self.progress.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(8, 15))
+        ttk.Label(panel, text="יומן פעילות").grid(row=11, column=2, sticky="e", pady=(0, 4))
         self.log = tk.Listbox(panel, borderwidth=0, highlightthickness=1, highlightbackground="#bdcbd9",
                               background="#ffffff", foreground="#14253b", exportselection=False)
-        self.log.grid(row=11, column=1, columnspan=2, sticky="nsew")
+        self.log.grid(row=12, column=1, columnspan=2, sticky="nsew")
         scroll = ttk.Scrollbar(panel, command=self.log.yview)
-        scroll.grid(row=11, column=0, sticky="nse")
+        scroll.grid(row=12, column=0, sticky="nse")
         self.log.configure(yscrollcommand=scroll.set)
         self.log.bind("<Double-1>", self.show_details)
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -326,7 +333,8 @@ class App:
                     raise ValueError("FFmpeg חסר. יש לחלץ מחדש את כל קובצי ה־ZIP לאותה תיקייה.")
                 raise ValueError("FFmpeg לא נמצא. יש לפתוח את Start Watermark.cmd להתקנה.")
             position = self.position.get()
-            self.save_settings(**values, position=position)
+            quality = self.quality.get()
+            self.save_settings(**values, position=position, quality=quality)
         except (OSError, ValueError) as error:
             messagebox.showerror("לא ניתן להתחיל מעקב", str(error), parent=self.root)
             return
@@ -338,7 +346,7 @@ class App:
         self.status.set("ממתין לקבצים")
         self.add_log("המעקב הופעל")
         self.worker = threading.Thread(target=watch, args=(ffmpeg, source, output, logo,
-                                                           position, self.events, self.stop, self.wake))
+                                                           position, quality, self.events, self.stop, self.wake))
         self.worker.start()
 
     def request_stop(self):
@@ -409,10 +417,10 @@ class App:
                 self.current.set(data[0])
                 self.set_progress(None)
                 self.add_log(f"בעיבוד — {data[0]}" + (f"  ·  בתור {data[1]}" if data[1] else ""))
-            elif kind == "progress" and data[0] is not None and not self.active_job.cancelled:
+            elif kind == "progress" and self.active_job is not None and not self.active_job.cancelled:
                 self.set_progress(data[0])
                 if not self.stop.is_set():
-                    self.status.set(f"מעבד קובץ · {data[0]}%")
+                    self.status.set("מתאים את גודל הפלט" if data[0] is None else f"מעבד קובץ · {data[0]}%")
             elif kind in ("done", "error", "cancelled"):
                 self.active_job = None
                 self.cancel_button.configure(state="disabled")
